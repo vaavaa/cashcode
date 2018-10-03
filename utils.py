@@ -163,3 +163,11 @@ class BillChannels:
         mask &= 0xffff
         return ((mask & 0xff), ((mask >> 8) & 0xff))
 
+    @property
+    def ccnet_chan_mask_tuple(self):
+        mask = 0
+        for k in self._channels:
+            mask |= (1 << (k-1))
+        mask &= 0xffffff
+        return (((mask >> 16) & 0xff), ((mask >> 8) & 0xff), (mask & 0xff))
+

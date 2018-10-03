@@ -119,25 +119,14 @@ class CCNet(Module):
         'Download': 0x50,
     }
 
-    country_prefix = list(b'RUB')
-
-    ###@@@
-    # nominal_list = {10: [0xE8, 0x3, 0x0, 0x0], 50: [0x88, 0x13, 0x0, 0x0],
-    #                 100: [0x10, 0x27, 0x0, 0x0], 500: [0x50, 0xC3, 0x0, 0x0],
-    #                 1000: [0xA0, 0x86, 0x1, 0x0], 5000: [0x20, 0xA1, 0x7, 0x0]}
-
     channel_map = {2: 10, 3: 50, 4: 100, 12: 200, 5: 500, 6: 1000, 13: 2000, 7: 5000}
     bill_channels = BillChannels(channel_map)
-
 
     def __init__(self):
         super().__init__()
         self._protocol = 'serial'
-
-        self._essp_id = 0 # fixed addr
-        self._dev_type = None
-
-        ###@@@ self._port = '/dev/ttyUSB0' ###@@@!!!@@@### FIXME: HARDCODE
+        self.prev_validator_state = None
+        self.curr_validator_state = None
 
     def run(self):
         while Global.run:
@@ -145,55 +134,65 @@ class CCNet(Module):
             sleep(0.888)
 
     def spin_once(self):
-
         if self._conn:
-            self.poll()
+            self.curr_validator_state = self.poll()
+            if self.prev_validator_state != self.curr_validator_state:
+                log.info('Validator has changed its state till [%s]' %\
+                  str(self.curr_validator_state))
+                self.prev_validator_state = self.curr_validator_state
 
-        # sts = self._status
-        # if sts:
-        #     if sts.startswith('holding'):
-        #         hold_resp = self.hold()
-        #         if self.extract_resp_code(hold_resp) != 'ok':
-        #             ###@@@ FIXME
-        #             self.close_connection()
-        #     elif sts.startswith('accepting'):
-        #         poll_results = self.poll()
-        #         if not poll_results or 'ok' not in poll_results:
-        #             ###@@@ FIXME
-        #             self.close_connection()
-        #         # enable if disabled ### FIXME
-        #         if 'disabled' in poll_results:
-        #             self.enable()
-        #         # look for credits
-        #         for res in poll_results:
-        #             if res.startswith('credit'):
-        #                 # extract credit channel
-        #                 chan = 0
-        #                 try:
-        #                     chan = int(res[len('credit'):].strip())
-        #                 except Exception as e:
-        #                     log.error(str(e))
-        #                 if chan:
-        #                     # get nominal and create event
-        #                     nominal = self.bill_channels.get(chan)
-        #                     self.append_event({nominal: 1})
+        sts = self._status
+        if sts:
+            if sts.startswith('holding'):
+                # waiting for accept of reject command
+                if not self.hold():
+                    ###@@@ FIXME
+                    self.close_connection()
+            elif sts.startswith('accepting') or sts.startswith('credit'):
+                if sts.startswith('credit'):
+                    sts.update_status('accepting')
+                # enable if disabled ### FIXME
+                if 'disabled' in self.curr_validator_state:
+                    if not self.enable():
+                        ###@@@ FIXME
+                        self.close_connection()
+                elif 'Escrow position' in self.curr_validator_state:
+                    if not self.accept():
+                        ###@@@ FIXME
+                        self.close_connection()
+                elif self.curr_validator_state.startswith('Bill stacked'):
+                    self.update_status('credit%s' %\
+                      self.curr_validator_state[len('Bill stacked'):])
+                    # get nominal and create event
+                    nominal = 0
+                    try:
+                        nominal = int(self.curr_validator_state[len('Bill stacked'):].strip())
+                    except:
+                        pass
+                    if nominal:
+                        self.append_event({nominal: 1})
+                elif self.curr_validator_state.startswith('Rejecting'):
+                    log.warning('Rejection occurred: ' + self.curr_validator_state)
+                elif self.curr_validator_state not in ('Idling', 'Accepting',
+                  'Stacking', 'Returning', 'Holding', 'Device busy'):
+                    log.error('Something goes wrong: ' + self.curr_validator_state)
+                    self.update_status('failed >> ' + self.curr_validator_state)
+                    self.disable()
 
-        # # serve requests
-        # sts = self._status
-        # rq = self._request
-        # if rq is not None and sts not in ('no_connection', 'initializing', None):
-        #     # print('got a request:', rq)
-        #     if rq.startswith('start'):
-        #         resp = self.enable()
-        #         if self.extract_resp_code(resp) == 'ok':
-        #             self.update_status('accepting')
-        #     elif rq.startswith('stop'):
-        #         resp = self.disable()
-        #         if self.extract_resp_code(resp) == 'ok':
-        #             self.update_status('idle')
-        #     #---
-        #     if rq is not None:
-        #         self._request = None
+        # serve requests
+        sts = self._status
+        rq = self._request
+        if rq is not None and sts not in ('no_connection', 'initializing', None):
+            # print('got a request:', rq)
+            if rq.startswith('start'):
+                if self.enable():
+                    self.update_status('accepting')
+            elif rq.startswith('stop'):
+                if self.disable():
+                    self.update_status('idle')
+            #---
+            if rq is not None:
+                self._request = None
 
     def extract_resp_code(self, resp):
         if resp and len(resp) >= MIN_CCNET_RESPONSE_LENGTH:
@@ -212,22 +211,19 @@ class CCNet(Module):
 
     def _initialize_device(self):
         self.update_status('initializing')
-        self.reset()
-        self.poll()
-        sleep(0.25)
-        self.poll()
-        sleep(0.25)
-        self.poll()
-        sleep(0.25)
-        self.poll()
-        sleep(0.25)
-        self.poll()
+        if not self.reset():
+            log.error('Device is not responding on "Reset" command')
+            return False
+        # wait until device initialized
+        while Global.run:
+            # sleep(0.25)
+            poll_resp = self.poll()
+            if poll_resp not in ('Power up', 'Initialize'):
+                break
+        self.disable()
         self.get_validator_status()
         self.get_cassette_status()
         self.get_validator_info()
-        self.disable()
-
-        # self.enable(*self.bill_channels.ccnet_chan_mask_tuple)
         # ---
         self.update_status('idle')
         return True
@@ -258,27 +254,39 @@ class CCNet(Module):
     def get_validator_info(self):
         return self._execute(['Identification'])
 
-    def enable(self, channels_mask):
-        return self._execute(['Enable bill types'] + list(channels_mask))
+    def enable(self, channels_mask=None):
+        if channels_mask is None:
+            channels_mask = self.bill_channels.ccnet_chan_mask_tuple
+        resp = self._execute(['Enable bill types'] +
+          list(channels_mask) + list(channels_mask))
+        return self.extract_resp_code(resp) == 'ACK'
 
     def disable(self):
         return self.enable((0, 0, 0))
 
     def poll(self):
         resp = self._execute(['Poll'])
-        log.info('poll result: ' + self.extract_resp_code(resp))
-        return self.extract_resp_code(resp)
-
+        resp_code = self.extract_resp_code(resp)
+        if resp_code in ('Bill returned', 'Bill stacked', 'Escrow position'):
+            # decode nominal
+            try:
+                chan = resp[4]
+                resp_code += ' ' + str(self.bill_channels.get(chan))
+            except:
+                pass
+        return resp_code
 
     def reject(self):
-        return self._execute(['Return'])
+        resp = self._execute(['Return'])
+        return self.extract_resp_code(resp) == 'ACK'
 
     def accept(self):
-        return self._execute(['Stack'])
+        resp = self._execute(['Stack'])
+        return self.extract_resp_code(resp) == 'ACK'
 
     def hold(self):
-        result = self._execute(['Hold'])
-        return result
+        resp = self._execute(['Hold'])
+        return self.extract_resp_code(resp) == 'ACK'
 
     @staticmethod
     def chk(v):
@@ -316,9 +324,9 @@ class CCNet(Module):
     def _execute(self, command):
         response = b''
         if self._conn and command:
-            print('ccnet execute: locked????????????????????')
+            # print('ccnet execute: locked????????????????????')
             with self._conn_lock:
-                print('ccnet execute: locked!!!!!!!!!!!!!!')
+                # print('ccnet execute: locked!!!!!!!!!!!!!!')
                 if type(command) is not list:
                     if type(command) in (int, float):
                         command = [int(command)]
@@ -327,6 +335,8 @@ class CCNet(Module):
                     else:
                         command = list(command)
                 log.debug(paint('-------- executing command %s' % str(command[0]), YELLOW))
+                if len(command) > 1:
+                    log.debug(paint('-------- with params %s' % brepr(command[1:]), YELLOW))
                 if len(command) > 0 and type(command[0]) is str:
                     cmd_code = self.CMDS.get(command[0])
                     if not cmd_code:
@@ -343,7 +353,7 @@ class CCNet(Module):
                     log.error('Got packet with insufficient length: %s' % brepr(response))
                     return b''
                 resp_code = self.extract_resp_code(response)
-                if command and command[0] == self.CMDS['Poll'] or resp_code == 'ACK':
+                if command[0] == self.CMDS['Poll'] or resp_code == 'ACK':
                     log.debug(paint('-------- response: %s' %\
                       str(resp_code), color))
                 else:
