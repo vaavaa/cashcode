@@ -138,10 +138,46 @@ class CCNet(Module):
     def spin_once(self):
         if self._conn:
             self.curr_validator_state = self.poll()
+            if self.curr_validator_state is None:
+                self.close_connection()
+                return
             if self.prev_validator_state != self.curr_validator_state:
                 log.info('Validator has changed its state till [%s]' %\
                   str(self.curr_validator_state))
                 self.prev_validator_state = self.curr_validator_state
+            if self.curr_validator_state in (
+              'Drop cassette full',
+              'Drop cassette out of position',
+              'Bill validator jammed',
+              'Cassette jammed',
+              'Cheated',
+              'Pause',
+              'Stack motor failure',
+              'Transport motor speed failure',
+              'Transport motor failure',
+              'Aligning motor failure',
+              'Initial box status failure',
+              'Optic canal failure',
+              'Magnetic canal failure',
+              'Cassette 1 motor failure',
+              'Cassette 2 motor failure',
+              'Cassette 3 motor failure',
+              'Bill-to-bill unit transport motor failure',
+              'Switch motor 1 failure',
+              'Switch motor 2 failure',
+              'Dispenser motor 1 failure',
+              'Dispenser motor 2 failure',
+              'Capacitance canal failure',
+              'Bill jammed in cassette 1',
+              'Bill jammed in cassette 2',
+              'Bill jammed in cassette 3',
+              'Bill jammed in transport path',
+              'Bill jammed in switch',
+              'Bill jammed in dispenser',
+              ):
+                self.update_status('failed >> ' + self.curr_validator_state)
+            elif 'disabled' in self.curr_validator_state:
+                self.update_status('idle')
 
         sts = self._status
         if sts:
@@ -150,18 +186,20 @@ class CCNet(Module):
                 if not self.hold():
                     ###@@@ FIXME
                     self.close_connection()
+                    return
             elif sts.startswith('accepting') or sts.startswith('credit'):
                 if sts.startswith('credit'):
-                    sts.update_status('accepting')
+                    self.update_status('accepting')
                 # enable if disabled ### FIXME
-                if 'disabled' in self.curr_validator_state:
-                    if not self.enable():
-                        ###@@@ FIXME
-                        self.close_connection()
-                elif 'Escrow position' in self.curr_validator_state:
+                if 'Escrow position' in self.curr_validator_state:
                     if not self.accept():
                         ###@@@ FIXME
                         self.close_connection()
+                        return
+                # elif 'disabled' in self.curr_validator_state:
+                #     if not self.enable():
+                #         ###@@@ FIXME
+                #         self.close_connection()
                 elif self.curr_validator_state.startswith('Bill stacked'):
                     self.update_status('credit%s' %\
                       self.curr_validator_state[len('Bill stacked'):])
@@ -259,6 +297,7 @@ class CCNet(Module):
     def enable(self, channels_mask=None):
         if channels_mask is None:
             channels_mask = self.bill_channels.ccnet_chan_mask_tuple
+            # channels_mask = (0xff, 0xff, 0xff) ###@@@!!!@@@###
         resp = self._execute(['Enable bill types'] +
           list(channels_mask) + list(channels_mask))
         return self.extract_resp_code(resp) == 'ACK'
@@ -273,6 +312,7 @@ class CCNet(Module):
             # decode nominal
             try:
                 chan = resp[4]
+                log.debug('Got a banknote channel %s' % str(chan))
                 resp_code += ' ' + str(self.bill_channels.get(chan))
             except:
                 pass
@@ -348,26 +388,28 @@ class CCNet(Module):
                 packet = self._make_ccnet_packet(command)
                 #log.debug(paint('-------- request: %s' %\
                 #               brepr(packet[3:-2]), CYAN))
-                response = self._conn.send_packet(packet, total_timeout=0.44)
-                color = GREEN
-                if not response or len(response) < MIN_CCNET_RESPONSE_LENGTH:
-                    # not a packet
-                    log.error('Got packet with insufficient length: %s' % brepr(response))
-                    return b''
-                resp_code = self.extract_resp_code(response)
-                if command[0] == self.CMDS['Poll'] or resp_code == 'ACK':
-                    log.debug(paint('-------- response: %s' %\
-                      str(resp_code), color))
-                else:
-                    log.debug(paint('-------- response: %s' %\
-                                   brepr(response[3:-2]), color))
-                if response and resp_code != 'ACK':
-                    # send ACK to validator
-                    resp_on_ack = self._conn.send_packet(
-                      self._make_ccnet_packet(self.ACK), total_timeout=0.140)
-                    if resp_on_ack:
-                        log.error('Device has sent a packet on host ACK: ' +
-                          brepr(resp_on_ack))
+                if self._conn: # if disconnected suddenly
+                    response = self._conn.send_packet(packet, total_timeout=0.44)
+                    color = GREEN
+                    if not response or len(response) < MIN_CCNET_RESPONSE_LENGTH:
+                        # not a packet
+                        log.error('Got packet with insufficient length: %s' % brepr(response))
+                        return b''
+                    resp_code = self.extract_resp_code(response)
+                    if command[0] == self.CMDS['Poll'] or resp_code == 'ACK':
+                        log.debug(paint('-------- response: %s' %\
+                          str(resp_code), color))
+                    else:
+                        log.debug(paint('-------- response: %s' %\
+                                       brepr(response[3:-2]), color))
+                    if response and resp_code != 'ACK':
+                        # send ACK to validator
+                        if self._conn: # if disconnected suddenly
+                            resp_on_ack = self._conn.send_packet(
+                              self._make_ccnet_packet(self.ACK), total_timeout=0.140)
+                            if resp_on_ack:
+                                log.error('Device has sent a packet on host ACK: ' +
+                                  brepr(resp_on_ack))
         return response
 
     #==============================================================
@@ -376,9 +418,9 @@ class CCNet(Module):
 
     def request_start_encashment(self):
         rq = 'start encashment'
-        return self.check_request_and_status(rq, 'idle')
+        return self.check_request_and_status(rq, ('idle', 'accepting', 'holding'))
 
     def request_stop_encashment(self):
         rq = 'stop encashment'
-        return self.check_request_and_status(rq, ('accepting', 'holding'))
+        return self.check_request_and_status(rq, ('idle', 'accepting', 'holding'))
 

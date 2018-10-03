@@ -167,7 +167,7 @@ class BillChannels:
     def ccnet_chan_mask_tuple(self):
         mask = 0
         for k in self._channels:
-            mask |= (1 << (k-1))
+            mask |= (1 << k)
         mask &= 0xffffff
         return (((mask >> 16) & 0xff), ((mask >> 8) & 0xff), (mask & 0xff))
 

@@ -18,18 +18,27 @@ if __name__ == '__main__':
         cc.get_status()
         sleep(1.8)
     # do encashment
-    for _ in range(30):
+    for _ in range(120): # about 2 minutes
         if not Global.run: break
-        cc.get_status()
+        bills.add(cc.get_events())
+        sts = cc.get_status()
+        if sts == 'idle':
+            # restart encashment
+            while not cc.request_start_encashment():
+                if not Global.run: break
+                cc.get_status()
+                sleep(1.8)
         sleep(1)
     # stop encashment
     while not cc.request_stop_encashment():
         if not Global.run: break
+        bills.add(cc.get_events())
         cc.get_status()
         sleep(1.8)
     # dummy
     for _ in range(3):
         if not Global.run: break
+        bills.add(cc.get_events())
         cc.get_status()
         sleep(1)
     # break
