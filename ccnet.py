@@ -273,10 +273,11 @@ class CCNet(Module):
             inited = self._initialize_device()
             if not inited:
                 return False
-        #resp = self.check_host_protocol_version()
-        #if resp and self.extract_resp_code(resp) == 'ok':
-        #    return True
-        return not False
+        else:
+            resp = self.get_validator_status()
+            if not resp:
+                return False
+        return True
 
     def reset(self):
         resp = self._execute(['Reset'])
