@@ -122,11 +122,13 @@ class CCNet(Module):
     channel_map = {2: 10, 3: 50, 4: 100, 12: 200, 5: 500, 6: 1000, 13: 2000, 7: 5000}
     bill_channels = BillChannels(channel_map)
 
-    def __init__(self):
+    def __init__(self, port_override=None):
         super().__init__()
         self._protocol = 'serial'
         self.prev_validator_state = None
         self.curr_validator_state = None
+        if port_override:
+            self._port = port_override
 
     def run(self):
         while Global.run:
@@ -348,7 +350,7 @@ class CCNet(Module):
                 #               brepr(packet[3:-2]), CYAN))
                 response = self._conn.send_packet(packet, total_timeout=0.44)
                 color = GREEN
-                if len(response) < MIN_CCNET_RESPONSE_LENGTH:
+                if not response or len(response) < MIN_CCNET_RESPONSE_LENGTH:
                     # not a packet
                     log.error('Got packet with insufficient length: %s' % brepr(response))
                     return b''
