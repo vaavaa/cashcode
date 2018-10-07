@@ -346,20 +346,6 @@ class CCNet(Module):
         return ret.to_bytes(2, 'little')
 
     def _make_ccnet_packet(self, cmd):
-        # if type(cmd) in (int, float):
-        #     cmd = int(cmd)
-        #     cmd = cmd.to_bytes(1, 'big')
-        # elif type(cmd) is bytes:
-        #     pass
-        # elif type(cmd) is list:
-        #     if len(cmd) > 0:
-        #         if type(cmd[0]) is str:
-        #             cmd[0] = self.CMDS.get(cmd[0]) or 0
-        #         cmd = bytes(cmd)
-        # elif type(cmd) is str:
-        #     cmd = self.CMDS.get(cmd[0]) or 0
-        #     cmd = cmd.to_bytes(1, 'big')
-
         payload = self.SYNC + self.ADDR + bytes([len(cmd) + 5]) + bytes(cmd)
         packet = payload + self.chk(payload)
         return packet
