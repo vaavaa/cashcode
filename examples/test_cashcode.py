@@ -5,7 +5,7 @@ from cashcode.utils import Bills
 from sys import argv
 
 if __name__ == '__main__':
-    port = '/dev/ttyS1'
+    port = '/dev/ttyUSB0'
     if len(argv) > 1:
         port = argv[1] # for example: '/dev/ttyUSB0'
     cc = ccnet.CCNet(port)
