@@ -2,6 +2,7 @@ from core.Global import *
 import serial
 import datetime
 import struct
+import time
 from .utils import BillChannels #, Bills
 ###@@@ from core.sender import Sender
 from core.module import Module
