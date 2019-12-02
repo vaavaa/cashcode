@@ -113,7 +113,7 @@ class Module(object):
         '''
         return self._alarms
 
-    def update_alarms(action, alarm):
+    def update_alarms(self, action, alarm):
         '''
         action is the one of the following: 'add', 'discard'
         '''
